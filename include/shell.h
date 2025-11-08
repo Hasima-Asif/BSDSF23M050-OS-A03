@@ -1,7 +1,9 @@
 #ifndef SHELL_H
 #define SHELL_H
 
-void myshell(void);
+#define HISTORY_SIZE 20
+
+void myshell();
 int execute(char **args);
 int handle_builtin(char **args);
 
