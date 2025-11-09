@@ -9,4 +9,10 @@ int handle_builtin(char **args);
 void parse_command(char *command, char **args);
 
 #endif
+shell();
+int execute(char **args);
+int handle_builtin(char **args);
+void parse_command(char *command, char **args);
+
+#endif
 
