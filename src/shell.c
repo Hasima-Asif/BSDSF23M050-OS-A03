@@ -1,108 +1,150 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
 #include "shell.h"
 
-char *history[HISTORY_SIZE];
+job job_list[JOBS_MAX];
+int job_count = 0;
+shell_var *var_list = NULL;
+
+char history_list[HISTORY_MAX][MAX_INPUT];
 int history_count = 0;
 
-// ---------------- Parse command ----------------
-void parse_command(char *command, char **args) {
-    int i = 0;
-    args[i] = strtok(command, " \n\t");
-    while (args[i] != NULL) {
-        i++;
-        args[i] = strtok(NULL, " \n\t");
+// -------------------- Job Handling --------------------
+void add_job(pid_t pid, char *cmd) {
+    if (job_count < JOBS_MAX) {
+        job_list[job_count].pid = pid;
+        strncpy(job_list[job_count].cmd, cmd, 255);
+        job_list[job_count].active = 1;
+        printf("[Background] PID: %d\n", pid);
+        job_count++;
     }
 }
 
-// ---------------- Built-in commands ----------------
-int handle_builtin(char **args) {
-    if (args[0] == NULL) return 0;
-
-    if (strcmp(args[0], "exit") == 0) {
-        for (int i = 0; i < history_count; i++)
-            free(history[i]);
-        printf("Exiting MyShell...\n");
-        exit(0);
-    } else if (strcmp(args[0], "cd") == 0) {
-        if (args[1] == NULL) {
-            fprintf(stderr, "cd: expected argument\n");
-        } else if (chdir(args[1]) != 0) {
-            perror("cd failed");
+void reap_background() {
+    int status;
+    for (int i = 0; i < job_count; i++) {
+        if (job_list[i].active) {
+            pid_t ret = waitpid(job_list[i].pid, &status, WNOHANG);
+            if (ret > 0) job_list[i].active = 0;
         }
+    }
+}
+
+// -------------------- Variable Handling --------------------
+void set_variable(char *assignment) {
+    char *eq = strchr(assignment, '=');
+    if (!eq) return;
+    *eq = '\0';
+    char *name = assignment;
+    char *value = eq + 1;
+
+    shell_var *var = var_list;
+    while (var) {
+        if (strcmp(var->name, name) == 0) {
+            free(var->value);
+            var->value = strdup(value);
+            return;
+        }
+        var = var->next;
+    }
+
+    var = malloc(sizeof(shell_var));
+    var->name = strdup(name);
+    var->value = strdup(value);
+    var->next = var_list;
+    var_list = var;
+}
+
+char* get_variable(const char *name) {
+    shell_var *var = var_list;
+    while (var) {
+        if (strcmp(var->name, name) == 0) return var->value;
+        var = var->next;
+    }
+    return NULL;
+}
+
+void expand_variables(char **args) {
+    for (int i = 0; args[i] != NULL; i++) {
+        if (args[i][0] == '$') {
+            char *val = get_variable(args[i] + 1);
+            if (val) args[i] = val;
+        }
+    }
+}
+
+void print_variables() {
+    shell_var *var = var_list;
+    while (var) {
+        printf("%s=%s\n", var->name, var->value);
+        var = var->next;
+    }
+}
+
+// -------------------- Built-ins --------------------
+int handle_builtin(char **args) {
+    if (!args[0]) return 0;
+
+    if (strcmp(args[0], "cd") == 0) {
+        chdir(args[1] ? args[1] : getenv("HOME"));
         return 1;
+    } else if (strcmp(args[0], "exit") == 0) {
+        exit(0);
     } else if (strcmp(args[0], "help") == 0) {
-        printf("MyShell Built-ins:\n");
-        printf("  exit   - Quit shell\n");
-        printf("  cd     - Change directory\n");
-        printf("  help   - List built-in commands\n");
-        printf("  jobs   - Job control not yet implemented\n");
-        printf("  history - Show last %d commands\n", HISTORY_SIZE);
-        printf("  !n     - Execute nth command from history\n");
+        printf("MyShell Built-ins:\n  exit  cd  help  jobs  history  set  !n\n");
         return 1;
     } else if (strcmp(args[0], "jobs") == 0) {
-        printf("Job control not yet implemented.\n");
+        for (int i = 0; i < job_count; i++)
+            if (job_list[i].active)
+                printf("[%d] PID %d  CMD: %s\n", i + 1, job_list[i].pid, job_list[i].cmd);
         return 1;
     } else if (strcmp(args[0], "history") == 0) {
         for (int i = 0; i < history_count; i++)
-            printf("%d  %s\n", i + 1, history[i]);
+            printf("%d  %s\n", i + 1, history_list[i]);
         return 1;
-    } else if (args[0][0] == '!' && strlen(args[0]) > 1) {
-        int index = atoi(&args[0][1]);
-        if (index < 1 || index > history_count) {
-            printf("No such command in history\n");
-        } else {
-            printf("Executing: %s\n", history[index - 1]);
-            char temp_command[1024];
-            strncpy(temp_command, history[index - 1], sizeof(temp_command));
-            temp_command[sizeof(temp_command) - 1] = '\0';
-            parse_command(temp_command, args);
-            if (!handle_builtin(args))
-                execute(args);
-        }
+    } else if (strcmp(args[0], "set") == 0) {
+        print_variables();
         return 1;
     }
-
+    // Variable assignment
+    if (strchr(args[0], '=') != NULL) {
+        set_variable(args[0]);
+        return 1;
+    }
     return 0;
 }
 
-// ---------------- Main shell loop ----------------
-void myshell() {
-    char command[1024];
-    char *args[64];
+// -------------------- Input Parsing --------------------
+int parse_input(char *input, char **args) {
+    int i = 0;
+    char *token = strtok(input, " \t\n");
+    while (token != NULL) {
+        args[i++] = token;
+        token = strtok(NULL, " \t\n");
+    }
+    args[i] = NULL;
+    return i;
+}
 
-    printf("Welcome to MyShell v3.0 with History\n");
+// -------------------- Main Shell Loop --------------------
+void myshell() {
+    char input[MAX_INPUT];
+    char *args[MAX_INPUT];
 
     while (1) {
+        reap_background();
         printf("myshell> ");
-        if (!fgets(command, sizeof(command), stdin)) {
-            printf("\n");
-            break;
+        fflush(stdout);
+
+        if (!fgets(input, MAX_INPUT, stdin)) break;
+        if (strlen(input) <= 1) continue;
+
+        strncpy(history_list[history_count++ % HISTORY_MAX], input, MAX_INPUT);
+
+        parse_input(input, args);
+        expand_variables(args);
+
+        if (!handle_builtin(args)) {
+            execute(args, 0);
         }
-
-        command[strcspn(command, "\n")] = 0;
-        if (strlen(command) == 0) continue;
-
-        // Store in history
-        if (history_count < HISTORY_SIZE) {
-            history[history_count++] = strdup(command);
-        } else {
-            free(history[0]);
-            for (int i = 1; i < HISTORY_SIZE; i++)
-                history[i - 1] = history[i];
-            history[HISTORY_SIZE - 1] = strdup(command);
-        }
-
-        // Parse arguments
-        parse_command(command, args);
-
-        // Built-in commands
-        if (handle_builtin(args)) continue;
-
-        // Execute external commands
-        execute(args);
     }
 }
 

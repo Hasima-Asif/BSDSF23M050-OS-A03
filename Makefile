@@ -6,7 +6,7 @@ BIN = bin/myshell
 all: $(BIN)
 
 $(BIN): $(SRC)
-	$(CC) $(CFLAGS) -o $(BIN) $(SRC)
+	$(CC) $(CFLAGS) -o $(BIN) $(SRC) -lreadline
 
 clean:
 	rm -f $(BIN)
