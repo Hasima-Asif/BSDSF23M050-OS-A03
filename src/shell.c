@@ -171,3 +171,5 @@ void myshell(void) {
     }
 }
 
+// Feature 7: Implemented if-then-else logic
+
